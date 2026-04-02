@@ -10,9 +10,6 @@ import argparse
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 
-# Suppress the InsecureRequestWarning
-warnings.simplefilter('ignore', InsecureRequestWarning)
-
 class GitLabProject(object):
     def __init__(self, project):
         self.api = project
@@ -96,7 +93,7 @@ if __name__ == "__main__":
     parser.add_argument('search', nargs='?', default="",  help='search path / group folder for scanning projects')
     parser.add_argument('--gitlab-url', help='gitlab url', default=os.environ.get('GITLAB_URL'))
     parser.add_argument('--no-ssl-verify', action='store_true', default=False)
-    parser.add_argument('--token', default=os.environ.get('GITLAB_ACCESS_TOKEN', help='uses environment variable GITLAB_ACCESS_TOKEN by default')
+    parser.add_argument('--token', default=os.environ.get('GITLAB_ACCESS_TOKEN'), help='uses environment variable GITLAB_ACCESS_TOKEN by default')
 
     args = parser.parse_args()
     if args.no_ssl_verify:
