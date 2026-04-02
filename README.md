@@ -6,7 +6,7 @@ Because the `.gitlab-ci.yml` file is just another blob of text in a repository, 
 To get this data, this project utilized the gitlab API to discover repositories with references to the library project and and combines the result with Pipeline History to give an indication of how active the reference is.
 
 ## requirements
-```
+```shell
 # if using pip package manager
 pip install python-gitlab
 
@@ -24,12 +24,12 @@ The api access token will need api read access to browse projects and repository
 
 ## Running
 Search all gitlab for references to libray http://your.gitlab.com/my-org/ci-library
-```
+```shell
 ./whatrequires my-org/ci-library
 ```
 
 Search everything withing the group/subgroup `other-org/ansible`
-```
+```shell
 ./whatrequires my-org/ci-library  other-org/ansible
 ```
 
