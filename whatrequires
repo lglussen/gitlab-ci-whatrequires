@@ -1,0 +1,109 @@
+#!/usr/bin/env python
+
+import re
+import os
+import gitlab
+import csv
+import warnings
+import yaml
+import argparse
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+
+
+# Suppress the InsecureRequestWarning
+warnings.simplefilter('ignore', InsecureRequestWarning)
+
+class GitLabProject(object):
+    def __init__(self, project):
+        self.api = project
+
+    def has_gitlab_ci(self):
+        tree = self.api.repository_tree(ref=self.api.default_branch, recursive=False)
+        filenames = [item['name'] for item in tree if item['type'] == 'blob']    
+        return next((name for name in filenames if name.lower() == ".gitlab-ci.yml" or name.lower() == ".gitlab-ci.yaml"), None)
+
+    def get_ci_content(self):
+        file_content = self.api.files.get(file_path='.gitlab-ci.yml', ref=self.api.default_branch)
+        content_decoded = file_content.decode().decode('utf-8')
+        return yaml.safe_load(content_decoded)
+
+    def get_include(self, key, pattern):
+        ci = self.get_ci_content()
+        return next((i for i in ci.get('include', []) if key in i and pattern.match(i[key])), None)
+
+    def includes_library(self, lib, default_branch):
+        if not self.has_gitlab_ci(): return False
+
+        ci = self.get_ci_content()
+        yaml_url = re.compile(rf".*/{lib}/.+\.ya?ml")
+        project_ref = re.compile(lib)
+        include_str = ci.get('include') if isinstance(ci.get('include'), str) and yaml_url.match(ci.get('include')) else None
+        include_p = self.get_include('project', project_ref)
+        include_e = self.get_include('remote', yaml_url)
+
+        if include_str or include_e:
+            ref = default_branch
+        elif include_p:
+            ref = include_p.get('ref', default_branch)
+        else: return False
+        return {
+            'reference': f'{self.api.path_with_namespace}/.gitlab-ci.yml',
+            'include': {
+              'name': lib,
+              'ref': ref,
+              'default_ref': ref == default_branch,
+              'last_run': self.last_run()
+            }
+        }
+
+    def last_run(self):
+        pipelines = self.api.pipelines.list(per_page=1, get_all=False)
+        return pipelines[0].created_at if pipelines else "No pipelines found"
+
+class GitlabCI_Ref(object):
+    def __init__(self, shared_ci, gl):
+        self.dependant_projects = {}
+        self.shared_ci = shared_ci
+        self.gl = gl
+        self.project = self.gl.projects.get(self.shared_ci)
+
+    def search(self, path):
+        if len(path) > 0:
+            group = self.gl.groups.get(path)
+            projects = group.projects.list(include_subgroups=True, get_all=True)
+        else:
+            projects = self.gl.projects.list(get_all=True)
+
+        for project_list_object in projects:
+            # We need the full project object to access the repository tree/files
+            project = GitLabProject( self.gl.projects.get(project_list_object.id) )
+            if project.api.archived:
+                continue
+            
+            reference = project.includes_library(self.shared_ci, self.project.default_branch)
+            if reference:
+                self.dependant_projects[project.api.path_with_namespace] = reference
+
+
+
+    
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='''
+            Search GitLab to find what projects are referencing a particular project/library from
+            their .gitlab-ci.yml pipeline configuration.''')
+    parser.add_argument('library', help='project path for library')
+    parser.add_argument('search', nargs='?', default="",  help='search path / group folder for scanning projects')
+    parser.add_argument('--gitlab-url', help='gitlab url', default=os.environ.get('GITLAB_URL'))
+    parser.add_argument('--no-ssl-verify', action='store_true', default=False)
+    parser.add_argument('--token', default=os.environ.get('GITLAB_ACCESS_TOKEN', help='uses environment variable GITLAB_ACCESS_TOKEN by default')
+
+    args = parser.parse_args()
+    if args.no_ssl_verify:
+        warnings.simplefilter('ignore', InsecureRequestWarning)
+
+    gl = gitlab.Gitlab(args.gitlab_url, private_token=args.token, ssl_verify=not args.no_ssl_verify)
+    ci = GitlabCI_Ref(args.library, gl) 
+    ci.search(args.search)
+
+    print(yaml.dump(ci.dependant_projects))
