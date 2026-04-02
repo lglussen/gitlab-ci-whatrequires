@@ -54,15 +54,26 @@ class GitLabProject(object):
         }
 
     def last_run(self):
-        pipelines = self.api.pipelines.list(per_page=1, get_all=False)
-        return pipelines[0].created_at if pipelines else "No pipelines found"
+        try:
+            pipeline = self.api.pipelines.latest()
+            return pipeline.created_at
+        except Exception as e:
+            return "No pipelines found"
 
 class GitlabCI_Ref(object):
-    def __init__(self, shared_ci, gl):
+    def __init__(self, shared_ci, gl, **kwargs):
         self.dependant_projects = {}
         self.shared_ci = shared_ci
         self.gl = gl
         self.project = self.gl.projects.get(self.shared_ci)
+        self.kwargs = kwargs
+        self.verbose = kwargs.get('verbose', False)
+    
+    def log_error(self, msg):
+        print(f'\033[91m{msg}\033[0m')
+    def log(self, msg, *, color=''):
+        print(f'{color}{msg}\033[0m')
+
 
     def search(self, path):
         if len(path) > 0:
@@ -71,16 +82,29 @@ class GitlabCI_Ref(object):
         else:
             projects = self.gl.projects.list(get_all=True)
 
+        total_projects = len(projects)
+        index = 0
         for project_list_object in projects:
+            index += 1
+            i = f'({index}/{total_projects})'
             # We need the full project object to access the repository tree/files
             project = GitLabProject( self.gl.projects.get(project_list_object.id) )
             if project.api.archived:
+                if self.verbose:
+                    self.log(f'{i} [archived - skipping] {project.api.path_with_namespace}')
                 continue
-            
-            reference = project.includes_library(self.shared_ci, self.project.default_branch)
-            if reference:
-                self.dependant_projects[project.api.path_with_namespace] = reference
-
+            try: 
+                reference = project.includes_library(self.shared_ci, self.project.default_branch)
+                if reference:
+                    self.dependant_projects[project.api.path_with_namespace] = reference
+                    if self.verbose:
+                        self.log(f'{i} [in-use] {project.api.path_with_namespace}', color='\033[96m')
+                elif self.verbose:
+                    self.log(f'{i} [no dependency] {project.api.path_with_namespace}')
+            except yaml.parser.ParserError as e:
+                self.log_error(f"{i} [ERROR] failed to parse .gitlab-ci.yml for {project.api.path_with_namespace}")
+            except Exception as e:
+                self.log_error(f"{i} [ERROR] failed to process {project.api.path_with_namespace}")
 
 
     
@@ -94,13 +118,14 @@ if __name__ == "__main__":
     parser.add_argument('--gitlab-url', help='gitlab url', default=os.environ.get('GITLAB_URL'))
     parser.add_argument('--no-ssl-verify', action='store_true', default=False)
     parser.add_argument('--token', default=os.environ.get('GITLAB_ACCESS_TOKEN'), help='uses environment variable GITLAB_ACCESS_TOKEN by default')
+    parser.add_argument('--verbose', default=False, action='store_true')
 
     args = parser.parse_args()
     if args.no_ssl_verify:
         warnings.simplefilter('ignore', InsecureRequestWarning)
 
     gl = gitlab.Gitlab(args.gitlab_url, private_token=args.token, ssl_verify=not args.no_ssl_verify)
-    ci = GitlabCI_Ref(args.library, gl) 
+    ci = GitlabCI_Ref(args.library, gl, verbose=args.verbose) 
     ci.search(args.search)
 
     print(yaml.dump(ci.dependant_projects))
