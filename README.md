@@ -18,18 +18,18 @@ dnf install python3-gitlab
 These values may be provided as arguments but may also be configured as enviroment variables
 ```shell
 export GITLAB_ACCESS_TOKEN='xxxxxxxx'
-export GITLAB_URL='http://gitlab.yourgitlab.com'
+export GITLAB_URL='https://your.gitlab.com'
 ```
 The api access token will need api read access to browse projects and repository read access to read the contents of `.gitlab-ci.yml` files.
 
 ## Running
-Search all gitlab for references to libray http://your.gitlab.com/my-org/ci-library
+Search all projects on your.gitlab.com for libray `https://your.gitlab.com/my-org/ci-library`
 ```shell
 ./whatrequires my-org/ci-library
 ```
 
-Search everything withing the group/subgroup `other-org/ansible`
+Search projects within the group/subgroup `other-org/ansible` with verbose flag for extra output
 ```shell
-./whatrequires my-org/ci-library  other-org/ansible
+./whatrequires my-org/ci-library  other-org/ansible --verbose
 ```
 
