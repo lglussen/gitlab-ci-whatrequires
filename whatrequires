@@ -6,6 +6,7 @@ import gitlab
 import csv
 import warnings
 import yaml
+import json
 import argparse
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
@@ -119,6 +120,9 @@ if __name__ == "__main__":
     parser.add_argument('--no-ssl-verify', action='store_true', default=False)
     parser.add_argument('--token', default=os.environ.get('GITLAB_ACCESS_TOKEN'), help='uses environment variable GITLAB_ACCESS_TOKEN by default')
     parser.add_argument('--verbose', default=False, action='store_true')
+    parser.add_argument('-o', '--out-file', help='write final strucured output to file instead of STDOUT. default format is yaml (for json provide -j flag)')
+    parser.add_argument('-j', '--json', default=False, action='store_true', help='format final strucured output as json')
+    
 
     args = parser.parse_args()
     if args.no_ssl_verify:
@@ -127,5 +131,14 @@ if __name__ == "__main__":
     gl = gitlab.Gitlab(args.gitlab_url, private_token=args.token, ssl_verify=not args.no_ssl_verify)
     ci = GitlabCI_Ref(args.library, gl, verbose=args.verbose) 
     ci.search(args.search)
+    
+    if args.json:
+        output = json.dumps(ci.dependant_projects, indent=4)
+    else:
+        output = yaml.dump(ci.dependant_projects)
 
-    print(yaml.dump(ci.dependant_projects))
+    if args.out_file:
+        with open(args.out_file, 'w') as f:
+            f.write(output)
+    else:
+        print(output)
