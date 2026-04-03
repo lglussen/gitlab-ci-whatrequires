@@ -1,0 +1,165 @@
+#!/usr/bin/env python
+
+import os
+import re
+import base64
+import gitlab
+import argparse
+
+parser = argparse.ArgumentParser(description="Configure Gitlab with projects and content to cover various test cases for the 'whatrequires' script")
+parser.add_argument('--gitlab-url', help='gitlab url', default=os.environ.get('GITLAB_URL'))
+parser.add_argument('--no-ssl-verify', action='store_true', default=False)
+parser.add_argument('--token', default=os.environ.get('GITLAB_ACCESS_TOKEN'), help='uses environment variable GITLAB_ACCESS_TOKEN by default. NOTE: this token requires the capability to create groups/projects/files. You may want to grant full API.')
+parser.add_argument('--group', help='the name of the base/root group that will contain all subgroups and projects', default='my-org')
+
+args = parser.parse_args()
+
+gl = gitlab.Gitlab(args.gitlab_url, private_token=args.token, ssl_verify=not args.no_ssl_verify)
+
+root_org = re.sub('[^a-z0-9]+', '-', args.group.lower().strip())
+
+ALTERNATIVE_INCLUDE=f'''
+include:
+    - project: {root_org}/ci-library
+      ref: alternative-branch
+      file: insult-and-injury.yaml
+'''
+
+
+DEFAULT_INCLUDE=f'''
+include:
+    - project: {root_org}/ci-library
+      file: insult-and-injury.yaml
+'''
+
+LIBRARY_CONTENT='''
+insult:
+    stage: insult
+    script: echo $TEAMNAME is smelly
+injury:
+    stage: injury
+    script: echo Break a leg $TEAMNAME
+'''
+
+NO_INCLUDE='''
+task1:
+    script: echo this is a simple task
+    stage: step1
+
+task2:
+    script: echo this is the second task
+    stage: step2
+
+stages:
+    - step1
+    - step2
+'''
+
+
+group_project = {
+    'name': root_org,
+    'visibility': 'public',
+    'children': [
+        {'name': 'ci-library', 'visibility': 'public', 'ci_filename': 'insult-and-injury.yaml', 'content': LIBRARY_CONTENT },
+        {'name': 'ci-library', 'visibility': 'public', 'ci_filename': 'insult-and-injury.yaml', 'content': LIBRARY_CONTENT, 'branch': 'alternative-branch' }, 
+        {'name': 'alternative-includes', 'children': [
+            {'name': 'alternative-branch', 'include': ALTERNATIVE_INCLUDE },
+            {'name': 'not-a-list', 'include': f'include: "{os.environ.get('GITLAB_URL')}/{root_org}/ci-library/-/raw/main/insult-and-injury.yaml"'},
+            {'name': 'remote', 'include': f'include:\n  - remote: "{os.environ.get('GITLAB_URL')}/{root_org}/ci-library/-/raw/main/insult-and-injury.yaml"'},
+        ]},
+        {'name': 'ansible', 'children': [
+            {'name': 'windows'},
+            {'name': 'linux'}
+        ]},
+        {'name': 'no-includes', 'children': [
+            {'name': 'dose-not-use-library', 'content': NO_INCLUDE }
+        ]},
+        {'name': 'problem-child', 'children': [
+            {'name': 'bad-yaml', 'content': 'step1:\n    big_indent: "value"\n  little_indent: "value"\n'},
+            {'name': 'no-pipline', 'disable_cicd': True }
+        ]}
+    ]
+}
+
+def ci_content(config):
+    include = config.get('include', DEFAULT_INCLUDE)
+    return f'''
+{include}
+
+variables:
+    TEAMNAME: {config['name'].upper()}
+
+stages:
+    - insult
+    - injury
+'''
+
+
+def create_gp(config, parent=None):
+    if 'children' in config:
+        print( f"create group: {config['name']}" )
+        try:
+            if parent:
+                group = gl.groups.create({ 'name': config['name'], 'path': config['name'], 'parent_id': parent.id, 'visibility': config.get('visibility', 'internal')  })
+            else:
+                group = gl.groups.create({ 'name': config['name'], 'path': config['name'], 'visibility': config.get('visibility', 'internal') })
+        except gitlab.exceptions.GitlabCreateError as e:
+            if e.response_code == 400:
+                path = f"{parent.full_path + '/' if parent else ''}{config['name']}"
+                print(f"Group already exists, loading {path} ...")
+                group = gl.groups.get(path)
+
+        for child in config['children']:
+            create_gp(child, group)
+    else:
+        try:
+            project = gl.projects.create({
+                'name': config['name'],
+                'namespace_id': parent.id,
+                'visibility': config.get('visibility', 'internal')
+            })
+        except gitlab.exceptions.GitlabCreateError as e:
+            if e.response_code == 400:
+                path = f"{parent.full_path + '/' if parent else ''}{config['name']}"
+                print(f"Project already exists, loading {path} ...")
+                project = gl.projects.get(path)
+            else:
+                raise e
+
+        if 'disable_cicd' in config:
+            project.builds_access_level = 'disabled'
+            project.save()
+
+        if 'branch' in config:
+            try:
+                branch = project.branches.get(config.get('branch'))
+            except gitlab.exceptions.GitlabGetError:
+                print(f"creating branch: {config.get('branch')}")
+                branch = project.branches.create({
+                  'branch': config.get('branch'),
+                  'ref': 'main'
+                })
+
+        data = {
+          'file_path': config.get('ci_filename', '.gitlab-ci.yml'),
+          'branch': config.get('branch', 'main'),
+          'content': config.get('content', ci_content(config)),
+          'commit_message': 'Adding pipeline config'
+        }
+        try:
+            project.files.create(data)
+        except gitlab.exceptions.GitlabCreateError as e:
+            if e.response_code == 400:
+                print('file already exists')
+                f = project.files.get(file_path=config.get('ci_filename', '.gitlab-ci.yml'), ref=config.get('branch', 'main'))
+                current_content = base64.b64decode(f.content).decode('utf-8')
+                new_content = config.get('content', ci_content(config))
+                if current_content != new_content:
+                    print('  modifying file contents ...')
+                    f.content = config.get('content', ci_content(config))               
+                    f.save(branch=config.get('branch', 'main'), commit_message='Update file content via Python')
+                else:
+                    print('  no changes required')
+
+
+create_gp(group_project)
