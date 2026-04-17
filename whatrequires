@@ -10,8 +10,13 @@ import json
 import argparse
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
+class GL(object):
+    def log_error(self, msg):
+        print(f'\033[91m{msg}\033[0m')
+    def log(self, msg, *, color=''):
+        print(f'{color}{msg}\033[0m')
 
-class GitLabProject(object):
+class GitLabProject(GL):
     def __init__(self, project):
         self.api = project
 
@@ -50,18 +55,19 @@ class GitLabProject(object):
               'name': lib,
               'ref': ref,
               'default_ref': ref == default_branch,
-              'last_run': self.last_run()
+              'last_run': self.last_run(ref)
             }
         }
 
-    def last_run(self):
+    def last_run(self, ref):
         try:
-            pipeline = self.api.pipelines.latest()
+            pipeline = self.api.pipelines.latest(ref=ref)
             return pipeline.created_at
         except Exception as e:
+            #self.log_error(e)
             return "No pipelines found"
 
-class GitlabCI_Ref(object):
+class GitlabCI_Ref(GL):
     def __init__(self, shared_ci, gl, **kwargs):
         self.dependant_projects = {}
         self.shared_ci = shared_ci
@@ -69,12 +75,6 @@ class GitlabCI_Ref(object):
         self.project = self.gl.projects.get(self.shared_ci)
         self.kwargs = kwargs
         self.verbose = kwargs.get('verbose', False)
-    
-    def log_error(self, msg):
-        print(f'\033[91m{msg}\033[0m')
-    def log(self, msg, *, color=''):
-        print(f'{color}{msg}\033[0m')
-
 
     def search(self, path):
         if len(path) > 0:
